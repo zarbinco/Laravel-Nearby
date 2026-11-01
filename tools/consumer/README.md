@@ -17,7 +17,7 @@ Use a new or empty directory for each run. The application, vendor dependencies,
 
 This is not a claim that every Laravel 13 version has been tested. An explicit `--framework=13.0.0` attempts that exact boundary and fails if Composer blocks it; the tool never disables security blocking or ignores platform requirements. Old transitive versions can emit deprecations on newer PHP interpreters even when their Composer constraints permit installation, which is why framework-minimum testing and an all-dependencies-lowest stress test are different checks.
 
-The unpublished local package receives a `dev-main` version only in the consumer's path-repository options. No global stability setting or public package metadata is changed. Composer uses a symlink or Windows junction to the checkout, so current source changes remain visible to the disposable consumer.
+The local checkout receives a `dev-main` version only in the consumer's path-repository options. No global stability setting or published package metadata is changed. Composer uses a symlink or Windows junction to the checkout, so current source changes remain visible to the disposable consumer.
 
 Each application runs in separate PHP processes using its own `vendor/autoload.php`. The runner verifies Artisan boot, audits the installed dependency set, and exercises the standalone API, all documented query scopes, custom DECIMAL columns, string keys, relationships, tenant scopes, soft deletes, pagination, model saving, serialization, repeated HTTP JSON responses, and a real PDO reconnection. Assertions fail the command immediately, and fixture tables are removed in a `finally` block.
 

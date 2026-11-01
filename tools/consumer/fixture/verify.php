@@ -107,6 +107,15 @@ try {
     $check(is_float($selected->nearby_distance_meters), 'Computed distance must be a PHP float.');
     $check(abs($selected->nearbyDistance()->in(Unit::Meter) - Geo::distance($origin, new Coordinate(0, 0.01))->in(Unit::Meter)) < 1.0e-6, 'Database and standalone distances must agree.');
     $check($selected->nearbyDistance()->in(Unit::Mile) > 0, 'Computed results must support unit conversion.');
+    $referenceDistance = Geo::distance($origin, new Coordinate(0, 0.01));
+
+    foreach (Unit::cases() as $unit) {
+        $expected = $referenceDistance->in($unit);
+        $tolerance = max(1.0e-6 / $unit->metersPerUnit(), abs($expected) * 1.0e-12);
+        $check(abs($selected->nearbyDistance()->in($unit) - $expected) <= $tolerance,
+            'Database results must convert consistently to '.$unit->value.'.');
+    }
+
     $boundary = Distance::fromMeters($selected->nearby_distance_meters);
     $check(Branch::query()->whereKey($near->id)->withinRadius($origin, $boundary)->exists(), 'An unrounded database distance must be included at the exact radius boundary.');
     $check(Branch::query()->whereKey($near->id)->betweenDistances($origin, min: $boundary, max: $boundary)->count() === 1, 'Equal distance-band boundaries must include the exact database distance.');

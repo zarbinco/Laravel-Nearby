@@ -1,8 +1,21 @@
 # Laravel Nearby
 
+[![Latest Stable Version](https://img.shields.io/packagist/v/zarbinco/laravel-nearby)](https://packagist.org/packages/zarbinco/laravel-nearby)
+[![Total Downloads](https://img.shields.io/packagist/dt/zarbinco/laravel-nearby)](https://packagist.org/packages/zarbinco/laravel-nearby)
+[![License](https://img.shields.io/github/license/zarbinco/Laravel-Nearby)](https://packagist.org/packages/zarbinco/laravel-nearby)
+[![Tests](https://github.com/zarbinco/Laravel-Nearby/actions/workflows/tests.yml/badge.svg)](https://github.com/zarbinco/Laravel-Nearby/actions/workflows/tests.yml)
+
 Laravel Nearby adds geographic proximity queries to existing Eloquent models and converts distances between common units. Use your model's latitude and longitude columns to find nearby records, search within a radius, and order results by distance.
 
 Its calculation core also works through Composer autoloading alone, without Laravel bootstrapping, a database connection, or an external service.
+
+## Features
+
+- Immutable coordinates with explicit validation and spherical geographic distance calculations.
+- Six distance units with unrounded conversions and overflow validation.
+- Eloquent nearest, radius, distance-band, and distance-ordering queries using existing numeric columns.
+- Read-only calculated distances, normal pagination, and configurable coordinate column names.
+- Conservative bounding-box filtering followed by the exact Haversine condition, with MySQL connection and reconnection validation.
 
 ## Requirements
 
@@ -18,38 +31,31 @@ Local package tests have run on PHP 8.3.30, 8.4.27, and 8.5.12 with Laravel 13.3
 
 ## Installation
 
-For a local checkout, place this package in a directory named `nearby` alongside your application directory. Merge this repository entry into your application's `composer.json`:
+Install the package from [Packagist](https://packagist.org/packages/zarbinco/laravel-nearby) with Composer:
 
-```json
-{
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../nearby",
-            "options": {
-                "versions": {
-                    "zarbinco/laravel-nearby": "dev-main"
-                }
-            }
-        }
-    ]
-}
+```bash
+composer require zarbinco/laravel-nearby
 ```
 
-Then run from your application directory:
+To request the stable 1.x series explicitly:
+
+```bash
+composer require "zarbinco/laravel-nearby:^1.0"
+```
+
+These commands require a compatible stable version to be published and indexed on Packagist. Check the package listing for available versions.
+
+No package migration, configuration publishing, service-provider registration, or additional environment variables are required. Eloquent queries use your application's existing MySQL connection and numeric coordinate columns. [Local checkout installation](#local-development-installation) is available for package development.
+
+### Testing Unreleased Changes
+
+Developers testing unreleased changes can request the development branch explicitly:
 
 ```bash
 composer require "zarbinco/laravel-nearby:dev-main@dev"
 ```
 
-This installs the local source without relying on a Packagist release or changing your application's global stability setting. Adjust `url` if your checkout is elsewhere. The same setup works in a standalone PHP project.
-
-To run this checkout's examples and tests directly:
-
-```bash
-composer install
-php examples/distance.php
-```
+This does not change your project's global stability setting. Development branches can change between installations.
 
 ## Quick Start
 
@@ -71,10 +77,13 @@ $destination = new Coordinate(latitude: 35.8400, longitude: 50.9391);
 
 $distance = Geo::distance($origin, $destination);
 
-printf("%.3f km\n", $distance->in(Unit::Kilometer));
+$kilometers = $distance->in(Unit::Kilometer);
+$miles = $distance->in(Unit::Mile);
+
+printf("%.3f km (%.3f mi)\n", $kilometers, $miles);
 ```
 
-This example displays `43.920 km`.
+This example displays `43.920 km (27.291 mi)`.
 
 ## Eloquent Models
 
@@ -387,7 +396,7 @@ Inspect the selected key, estimated rows, and any sorting or temporary-table wor
 
 ### Optional Benchmarks
 
-The [benchmark guide](benchmarks/README.md) explains how to compare exact-distance queries with bounded searches on deterministic uniform and clustered datasets, using several ordinary index layouts. From a dedicated MySQL 8.4 development database configured through `DB_*` environment variables:
+The [benchmark guide](https://github.com/zarbinco/Laravel-Nearby/blob/main/benchmarks/README.md) explains how to compare exact-distance queries with bounded searches on deterministic uniform and clustered datasets, using several ordinary index layouts. From a dedicated MySQL 8.4 development database configured through `DB_*` environment variables:
 
 ```bash
 php benchmarks/benchmark.php --run --sizes=1000 --warmups=2 --repetitions=5
@@ -581,13 +590,39 @@ To check actual dependency resolution separately from the quick metadata fixture
 composer test:compatibility:real
 ```
 
-The [consumer testing guide](tools/consumer/README.md) describes installing this checkout into a disposable Laravel application, booting Artisan and HTTP requests, and exercising its existing coordinate columns. Those checks use a separate database ending in `_consumer` and do not install Testbench. The guide also explains security-blocked minimum-version results and why consumer dependencies must be resolved for the PHP runtime being tested.
+The [consumer testing guide](https://github.com/zarbinco/Laravel-Nearby/blob/main/tools/consumer/README.md) describes installing this checkout into a disposable Laravel application, booting Artisan and HTTP requests, and exercising its existing coordinate columns. Those checks use a separate database ending in `_consumer` and do not install Testbench. The guide also explains security-blocked minimum-version results and why consumer dependencies must be resolved for the PHP runtime being tested.
 
 The executable files in `examples/` demonstrate distance calculation, conversions, direct construction, and exception handling using Composer autoloading alone.
+
+### Local Development Installation
+
+To develop against a checkout, place this repository in a directory named `nearby` alongside your application and merge this path repository into the application's `composer.json`:
+
+```json
+{
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../nearby",
+            "options": {
+                "versions": {
+                    "zarbinco/laravel-nearby": "dev-main"
+                }
+            }
+        }
+    ]
+}
+```
+
+Then run `composer require "zarbinco/laravel-nearby:dev-main@dev"` in the application. Adjust `url` for another checkout location. In the package checkout itself, run `composer install` and `composer examples` to execute the standalone examples.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and documentation guidance.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for reporting suspected vulnerabilities without disclosing sensitive details publicly.
 
 ## License
 

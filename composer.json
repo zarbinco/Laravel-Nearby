@@ -73,6 +73,29 @@
             "Zarbinco\\Nearby\\Tests\\": "tests/"
         }
     },
+    "archive": {
+        "exclude": [
+            "/.gitattributes",
+            "/.github",
+            "/.gitignore",
+            "/.phpunit.cache",
+            "/.phpunit.result.cache",
+            "/benchmarks",
+            "/build",
+            "/tests",
+            "/tools",
+            "/vendor",
+            "/composer.lock",
+            "/phpunit*.xml",
+            "/.env",
+            "/.env.*",
+            "/auth.json",
+            "/*.zip",
+            "/*.tar",
+            "/*.tar.gz",
+            "/*.tar.bz2"
+        ]
+    },
     "scripts": {
         "test": "@php vendor/bin/phpunit",
         "test:integration": "@php vendor/bin/phpunit -c phpunit.integration.xml",

@@ -12,6 +12,7 @@ use InvalidArgumentException;
 use PDO;
 use RuntimeException;
 use Throwable;
+use Zarbinco\Nearby\Eloquent\Concerns\HasNearbyCoordinates;
 use Zarbinco\Nearby\Eloquent\MySqlDistanceExpression;
 use Zarbinco\Nearby\Eloquent\MySqlQueryGuard;
 
@@ -19,6 +20,8 @@ require dirname(__DIR__).'/vendor/autoload.php';
 
 final class GuardProfileModel extends Model
 {
+    use HasNearbyCoordinates;
+
     protected $table = 'nearby_benchmark_guard';
 }
 
