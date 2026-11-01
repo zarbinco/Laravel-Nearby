@@ -1,0 +1,85 @@
+{
+    "name": "zarbinco/laravel-nearby",
+    "description": "Geographic distance calculations and unit conversions for Laravel and standalone PHP.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Zarbinco",
+            "homepage": "https://github.com/zarbinco"
+        }
+    ],
+    "homepage": "https://github.com/zarbinco/Laravel-Nearby",
+    "keywords": ["laravel", "geographic", "distance", "haversine", "coordinates"],
+    "support": {
+        "issues": "https://github.com/zarbinco/Laravel-Nearby/issues",
+        "source": "https://github.com/zarbinco/Laravel-Nearby"
+    },
+    "require": {
+        "php": "^8.3"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^12.5"
+    },
+    "conflict": {
+        "laravel/framework": "<13.0",
+        "illuminate/auth": "<13.0",
+        "illuminate/broadcasting": "<13.0",
+        "illuminate/bus": "<13.0",
+        "illuminate/cache": "<13.0",
+        "illuminate/collections": "<13.0",
+        "illuminate/concurrency": "<13.0",
+        "illuminate/conditionable": "<13.0",
+        "illuminate/config": "<13.0",
+        "illuminate/console": "<13.0",
+        "illuminate/container": "<13.0",
+        "illuminate/contracts": "<13.0",
+        "illuminate/cookie": "<13.0",
+        "illuminate/database": "<13.0",
+        "illuminate/encryption": "<13.0",
+        "illuminate/events": "<13.0",
+        "illuminate/filesystem": "<13.0",
+        "illuminate/hashing": "<13.0",
+        "illuminate/http": "<13.0",
+        "illuminate/image": "<13.0",
+        "illuminate/json-schema": "<13.0",
+        "illuminate/log": "<13.0",
+        "illuminate/macroable": "<13.0",
+        "illuminate/mail": "<13.0",
+        "illuminate/notifications": "<13.0",
+        "illuminate/pagination": "<13.0",
+        "illuminate/pipeline": "<13.0",
+        "illuminate/process": "<13.0",
+        "illuminate/queue": "<13.0",
+        "illuminate/redis": "<13.0",
+        "illuminate/reflection": "<13.0",
+        "illuminate/routing": "<13.0",
+        "illuminate/session": "<13.0",
+        "illuminate/support": "<13.0",
+        "illuminate/testing": "<13.0",
+        "illuminate/translation": "<13.0",
+        "illuminate/validation": "<13.0",
+        "illuminate/view": "<13.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Zarbinco\\Nearby\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Zarbinco\\Nearby\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "@php vendor/bin/phpunit",
+        "test:compatibility": "@php tools/check-compatibility.php",
+        "examples": [
+            "@php examples/distance.php",
+            "@php examples/invalid-input.php"
+        ]
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
