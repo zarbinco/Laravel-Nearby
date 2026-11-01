@@ -12,9 +12,9 @@ Its calculation core also works through Composer autoloading alone, without Lara
 
 The package requires `illuminate/database:^13.0`; Laravel 13 satisfies that dependency through its normal Composer replacement mechanism. The full Laravel framework is a development dependency through Orchestra Testbench, rather than a runtime requirement. Standalone calculations do not require an application or database connection.
 
-CI is configured to run the standalone suite on PHP 8.3, 8.4, and 8.5, and Laravel 13 integration tests against MySQL 8.4 on PHP 8.3. Other Laravel major versions and database engines are currently unsupported.
+CI is configured for standalone tests, real MySQL integration tests, and separate latest/lowest Laravel 13 consumer installations on PHP 8.3, 8.4, and 8.5. Each workflow run shares one resolved development lockfile across its package test jobs; consumer applications resolve their own runtime dependencies. Hosted workflow results are separate from local verification.
 
-Database integration has been verified locally with Laravel 13.39.0, MySQL 8.4.3, and PHP 8.3.30.
+Local package tests have run on PHP 8.3.30, 8.4.27, and 8.5.12 with Laravel 13.39.0 and MySQL 8.4.3. Separate consumer applications have verified Laravel 13.30.0 and 13.39.0 without Testbench. These are verified versions, rather than a claim that every Laravel 13 release was tested. Exact Laravel 13.0.0 remains unverified because Composer blocks it for framework security advisories; verification never disables that protection. Other Laravel major versions and database engines are unsupported.
 
 ## Installation
 
@@ -273,6 +273,19 @@ $page = (clone $query)
 
 Use radius or distance-band filtering with ordinary `paginate()`; choose its page size through `paginate()`. `nearestTo()` is intended for a limited result set retrieved with `get()` or `first()`.
 
+The following retrieval methods also preserve geographic filtering and ordering. Computed values are available when the query includes `withDistance()` or `nearestTo()`:
+
+| Retrieval method | Result and distance behavior |
+| --- | --- |
+| `get()`, `first()`, `firstOrFail()` | Normal Eloquent models or collections with hydrated distances; normal missing-model behavior applies. |
+| `paginate()`, `simplePaginate()` | Normal Laravel paginators with computed distances on their models. |
+| `cursor()`, `lazy()` | Laravel lazy collections of models with hydrated distances. |
+| `chunk()` | Eloquent model batches passed to your callback; an existing nearest-result limit is respected. |
+| `pluck()` | A scalar collection of existing database columns. Use `get()->pluck('nearby_distance_meters')` for calculated values. |
+| `value()` | The first scalar value, or null for no result; calculated distance works when selected by a proximity scope. |
+
+`cursor()` follows Laravel's usual limitation on eager loading. Use `get()` or `lazy()` when relationships need eager loading. Basic `belongsTo` eager loading and relationship filters compose with the geographic scopes; retain the primary and foreign keys Laravel needs when choosing explicit columns. ID-based chunking with distance ordering has not been verified.
+
 ## Query Behavior and Limits
 
 | Method | Filters invalid or missing coordinates | Adds computed distance | Ordering |
@@ -287,7 +300,7 @@ All methods return a normal Eloquent builder and keep ordinary conditions, globa
 
 Basic joins are supported: coordinate columns are qualified with the model table, and the default selection is the model's `table.*`, so joined-table attributes are not selected automatically. Keep the model table as the query's `FROM` source. Model table aliases, subquery `FROM` sources, schema-qualified table names, grouped queries, unions, distinct projections, custom raw result shapes, and cursor pagination are outside the supported query contract. A join that produces duplicate model rows retains normal SQL behavior.
 
-If you deliberately remove application global scopes with `withoutGlobalScopes()`, do so before adding proximity methods. Removing all scopes afterward also removes the query's connection-validation scope and is outside the supported query contract.
+Application global scopes follow Laravel's normal `withoutGlobalScopes()` behavior. Connection validation remains attached to geographic queries and their clones.
 
 The proximity scopes support retrieval and aggregate queries; bulk geographic `update()` and `delete()` operations are outside the supported query contract. Saving an individual retrieved model remains supported.
 
@@ -306,6 +319,10 @@ try {
     report($exception);
 }
 ```
+
+Every read, write, and failover endpoint must use MySQL 8.4. Retained builders validate replacement PDOs after explicit reconnection and during Laravel's automatic retry of a lost connection. Unsupported replacements raise `UnsupportedDatabaseException` before the geographic statement is prepared. Validation uses PDO's server-version metadata, adds no separate SQL query, and is cached per physical PDO within a query and its clones. Laravel's read/write routing and transaction retry rules remain in effect.
+
+Execute proximity queries through a model using `HasNearbyCoordinates`, Laravel's standard MySQL connection, and its standard base query builder. Custom connection subclasses and custom base query builders are rejected for geographic queries because their execution behavior cannot be validated safely. Basic relationship filters on the geographic model and eager loading remain supported. Embedding geographic scopes in subqueries executed by a different model, or manually executing SQL exported with `toSql()`, is outside the supported query contract.
 
 ## Performance
 
@@ -542,7 +559,7 @@ composer examples
 
 `composer test` runs the standalone suite without connecting to a database. It covers validation (including weakly typed callers), immutability, unit conversions and overflow, and geographic edge cases against analytic references. `composer test:compatibility` exercises Composer constraints and Laravel's Illuminate replacement behavior using isolated metadata fixtures.
 
-For Eloquent integration tests, prepare a dedicated, disposable **MySQL 8.4** database and configure its connection. The tests drop and recreate `nearby_test_branches` and `nearby_test_custom_branches`; never point them at an application or production database.
+For Eloquent integration tests, prepare a dedicated, disposable **MySQL 8.4** database and configure its connection. The tests create, drop, or recreate `nearby_test_branches`, `nearby_test_custom_branches`, and `nearby_test_regions`; never point them at an application or production database.
 
 In Bash, set the connection values for that test database and enter its password when prompted:
 
@@ -557,6 +574,14 @@ composer test:integration
 ```
 
 Use your shell's environment-variable syntax on other platforms, and keep credentials outside tracked files. `composer test:all` runs both suites with the same database environment. The integration suite executes real SQL through Laravel and Orchestra Testbench; it checks filters, ordering, precision, query composition, model behavior, and input safety. The CI configuration includes a separate MySQL 8.4 service for these tests.
+
+To check actual dependency resolution separately from the quick metadata fixtures:
+
+```bash
+composer test:compatibility:real
+```
+
+The [consumer testing guide](tools/consumer/README.md) describes installing this checkout into a disposable Laravel application, booting Artisan and HTTP requests, and exercising its existing coordinate columns. Those checks use a separate database ending in `_consumer` and do not install Testbench. The guide also explains security-blocked minimum-version results and why consumer dependencies must be resolved for the PHP runtime being tested.
 
 The executable files in `examples/` demonstrate distance calculation, conversions, direct construction, and exception handling using Composer autoloading alone.
 

@@ -9,18 +9,25 @@ use Illuminate\Database\Eloquent\Attributes\Scope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use InvalidArgumentException;
 use LogicException;
 use Zarbinco\Nearby\Coordinate;
 use Zarbinco\Nearby\Distance;
 use Zarbinco\Nearby\Eloquent\GeographicBoundingBox;
 use Zarbinco\Nearby\Eloquent\MySqlDistanceExpression;
+use Zarbinco\Nearby\Eloquent\MySqlQueryBuilder;
 use Zarbinco\Nearby\Exceptions\InvalidDistanceException;
 use Zarbinco\Nearby\Unit;
 
 trait HasNearbyCoordinates
 {
     private ?float $nearbyComputedDistanceMeters = null;
+
+    protected function newBaseQueryBuilder(): QueryBuilder
+    {
+        return MySqlQueryBuilder::wrap(parent::newBaseQueryBuilder());
+    }
 
     public function initializeHasNearbyCoordinates(): void
     {

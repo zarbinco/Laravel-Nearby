@@ -8,8 +8,36 @@ permissions:
   contents: read
 
 jobs:
+  dependencies:
+    name: Resolve dependencies on PHP 8.3
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: dom, mbstring, xml, xmlwriter
+          coverage: none
+          tools: composer:v2
+      - name: Validate Composer metadata
+        run: composer validate --strict
+      - name: Resolve development dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+      - name: Audit dependencies
+        run: composer audit
+      - name: Share the resolved dependency versions
+        uses: actions/upload-artifact@v7
+        with:
+          name: composer-lock
+          path: composer.lock
+          retention-days: 1
+          if-no-files-found: error
+
   tests:
     name: PHP ${{ matrix.php }}
+    needs: dependencies
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -25,6 +53,9 @@ jobs:
           extensions: dom, mbstring, xml, xmlwriter
           coverage: none
           tools: composer:v2
+      - uses: actions/download-artifact@v8
+        with:
+          name: composer-lock
       - name: Validate Composer metadata
         run: composer validate --strict
       - name: Install dependencies
@@ -36,12 +67,20 @@ jobs:
       - name: Verify Composer constraints
         if: matrix.php == '8.3'
         run: composer test:compatibility
+      - name: Verify real dependency compatibility
+        if: matrix.php == '8.3'
+        run: php tools/check-real-compatibility.php --output=build/real-compatibility.json
       - name: Run standalone examples
         run: composer examples
 
   integration:
-    name: Laravel 13 / MySQL 8.4
+    name: Laravel 13 / MySQL 8.4 / PHP ${{ matrix.php }}
+    needs: dependencies
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
     services:
       mysql:
         image: mysql:8.4
@@ -50,6 +89,7 @@ jobs:
           MYSQL_USER: nearby
           MYSQL_PASSWORD: nearby_test
           MYSQL_ROOT_PASSWORD: nearby_root_test
+          MYSQL_ROOT_HOST: '%'
         ports:
           - 3306:3306
         options: >-
@@ -70,13 +110,39 @@ jobs:
           persist-credentials: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: ${{ matrix.php }}
           extensions: dom, mbstring, xml, xmlwriter, pdo_mysql
           coverage: none
           tools: composer:v2
+      - uses: actions/download-artifact@v8
+        with:
+          name: composer-lock
       - name: Validate Composer metadata
         run: composer validate --strict
       - name: Install dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
       - name: Run MySQL integration tests
         run: composer test:integration
+      - name: Prepare the isolated consumer database
+        env:
+          MYSQL_ROOT_PASSWORD: nearby_root_test
+        run: |
+          php <<'PHP'
+          <?php
+          $pdo = new PDO(
+              'mysql:host=127.0.0.1;port=3306;charset=utf8mb4',
+              'root',
+              getenv('MYSQL_ROOT_PASSWORD'),
+              [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
+          );
+          $pdo->exec('CREATE DATABASE IF NOT EXISTS nearby_consumer CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+          $pdo->exec("GRANT ALL PRIVILEGES ON nearby_consumer.* TO 'nearby'@'%'");
+          PHP
+      - name: Verify the latest Laravel 13 consumer
+        env:
+          DB_DATABASE: nearby_consumer
+        run: php tools/consumer/run.php --run --framework=latest --directory=build/consumer-latest
+      - name: Verify the lowest resolvable Laravel 13 consumer
+        env:
+          DB_DATABASE: nearby_consumer
+        run: php tools/consumer/run.php --run --framework=lowest --directory=build/consumer-lowest

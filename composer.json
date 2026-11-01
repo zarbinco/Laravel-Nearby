@@ -81,6 +81,8 @@
             "@test:integration"
         ],
         "test:compatibility": "@php tools/check-compatibility.php",
+        "test:compatibility:real": "@php tools/check-real-compatibility.php",
+        "test:consumer": "@php tools/consumer/run.php",
         "examples": [
             "@php examples/distance.php",
             "@php examples/invalid-input.php"
