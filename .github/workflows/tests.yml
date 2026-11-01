@@ -30,7 +30,7 @@ jobs:
       - name: Install dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
       - name: Check PHP syntax
-        run: find src tests examples tools -name '*.php' -print0 | xargs -0 -n1 php -l
+        run: find src tests examples tools benchmarks -name '*.php' -print0 | xargs -0 -n1 php -l
       - name: Run tests
         run: composer test
       - name: Verify Composer constraints

@@ -13,6 +13,7 @@ use InvalidArgumentException;
 use LogicException;
 use Zarbinco\Nearby\Coordinate;
 use Zarbinco\Nearby\Distance;
+use Zarbinco\Nearby\Eloquent\GeographicBoundingBox;
 use Zarbinco\Nearby\Eloquent\MySqlDistanceExpression;
 use Zarbinco\Nearby\Exceptions\InvalidDistanceException;
 use Zarbinco\Nearby\Unit;
@@ -23,7 +24,7 @@ trait HasNearbyCoordinates
 
     public function initializeHasNearbyCoordinates(): void
     {
-        $this->append('nearby_distance_meters');
+        // Keep this hook available for models that explicitly call the initializer.
     }
 
     protected function nearbyLatitudeColumn(): string
@@ -97,6 +98,7 @@ trait HasNearbyCoordinates
     protected function withinRadius(Builder $query, Coordinate $origin, Distance $radius): Builder
     {
         $expression = $this->nearbyExpression($query, $origin);
+        GeographicBoundingBox::around($origin, $radius)?->applyTo($query, $this->nearbyLatitudeColumn(), $this->nearbyLongitudeColumn());
 
         return $query->whereRaw(
             $expression->sql.' <= CAST(? AS DOUBLE)',
@@ -115,6 +117,7 @@ trait HasNearbyCoordinates
         }
 
         $expression = $this->nearbyExpression($query, $origin);
+        GeographicBoundingBox::around($origin, $max)?->applyTo($query, $this->nearbyLatitudeColumn(), $this->nearbyLongitudeColumn());
 
         return $query->whereRaw(
             $expression->sql.' BETWEEN CAST(? AS DOUBLE) AND CAST(? AS DOUBLE)',
@@ -171,6 +174,7 @@ trait HasNearbyCoordinates
 
         $value = $this->attributes[$alias];
         $this->nearbyComputedDistanceMeters = $value === null ? null : (float) $value;
+        $this->append('nearby_distance_meters');
         unset($this->attributes[$alias], $this->original[$alias]);
     }
 }

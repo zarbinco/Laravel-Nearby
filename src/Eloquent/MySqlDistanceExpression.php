@@ -7,7 +7,6 @@ namespace Zarbinco\Nearby\Eloquent;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\MySqlConnection;
-use Illuminate\Database\Query\Builder as QueryBuilder;
 use InvalidArgumentException;
 use PDO;
 use Zarbinco\Nearby\Calculators\HaversineCalculator;
@@ -72,12 +71,7 @@ final readonly class MySqlDistanceExpression
             ...$aBindings,
         ];
 
-        $table = $query->getModel()->getTable();
-
-        $query->getQuery()->beforeQuery(static function (QueryBuilder $query) use ($table): void {
-            self::assertTable($query->from, $table);
-            self::assertServerVersion($query->getConnection(), $query->useWritePdo);
-        });
+        MySqlQueryGuard::register($query);
     }
 
     public static function qualifiedColumn(Builder $query, string $column): string
@@ -117,6 +111,11 @@ final readonly class MySqlDistanceExpression
         self::assertMySqlConnection($connection);
 
         $pdo = $useWritePdo ? $connection->getPdo() : $connection->getReadPdo();
+        self::assertPdoVersion($pdo);
+    }
+
+    public static function assertPdoVersion(PDO $pdo): void
+    {
         $version = (string) $pdo->getAttribute(PDO::ATTR_SERVER_VERSION);
 
         if (stripos($version, 'MariaDB') !== false || preg_match('/\A8\.4(?:\.|\z)/', $version) !== 1) {

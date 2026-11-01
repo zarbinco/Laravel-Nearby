@@ -226,7 +226,9 @@ foreach ($branches as $branch) {
 
 `withDistance()` preserves the original models and selected attributes. Called alone, it retains records with null or out-of-range coordinates and returns a null distance for them. Valid distances are unrounded PHP floats in meters, compatible with `Distance::fromMeters()`. `nearbyDistance()` returns the corresponding immutable `Distance` object, or null when no computed result is available. All six distance units remain available.
 
-The read-only `nearby_distance_meters` property is a virtual attribute included in model serialization. The trait keeps it outside Eloquent's persisted attributes, so updating and saving the model, including `saveQuietly()`, does not write it to the database. Assigning it raises `LogicException`. The value describes the query result at the time it was retrieved; changing coordinates, saving, or calling `refresh()` does not recalculate it. Run a new `withDistance()` query when you need an updated result. A newly loaded model without `withDistance()` has a null distance.
+The read-only `nearby_distance_meters` property is a virtual attribute. Models retrieved through `withDistance()` or `nearestTo()` include it in `toArray()` and JSON, including a null value when selected coordinates are invalid. Ordinary models do not automatically gain this serialized field; direct property access and `nearbyDistance()` still return null. Explicit `$appends`, `$hidden`, and `$visible` settings remain respected.
+
+The trait keeps the value outside Eloquent's persisted attributes, so updating and saving the model, including `saveQuietly()`, does not write it to the database. Assigning it raises `LogicException`. The value describes the query result at the time it was retrieved; changing coordinates, saving, or calling `refresh()` does not recalculate it. Run a new `withDistance()` query when you need an updated result.
 
 Reserve `nearby_distance_meters` for this property. Do not define a real column, default attribute, cast, accessor, or selected SQL alias with that name. Conflicting selections already present when `withDistance()` is called raise `InvalidArgumentException`; conflicting model attributes or casts, and conflicting selected attributes or real columns encountered during result hydration, raise `LogicException`. The package does not inspect database schemas to discover conflicts before querying.
 
@@ -285,6 +287,10 @@ All methods return a normal Eloquent builder and keep ordinary conditions, globa
 
 Basic joins are supported: coordinate columns are qualified with the model table, and the default selection is the model's `table.*`, so joined-table attributes are not selected automatically. Keep the model table as the query's `FROM` source. Model table aliases, subquery `FROM` sources, schema-qualified table names, grouped queries, unions, distinct projections, custom raw result shapes, and cursor pagination are outside the supported query contract. A join that produces duplicate model rows retains normal SQL behavior.
 
+If you deliberately remove application global scopes with `withoutGlobalScopes()`, do so before adding proximity methods. Removing all scopes afterward also removes the query's connection-validation scope and is outside the supported query contract.
+
+The proximity scopes support retrieval and aggregate queries; bulk geographic `update()` and `delete()` operations are outside the supported query contract. Saving an individual retrieved model remains supported.
+
 MySQL 8.4.x is the supported query engine. PostgreSQL, SQLite, MariaDB, and other MySQL versions raise `UnsupportedDatabaseException`; unsupported drivers are rejected before executing the geographic SQL, and server versions are checked when the query is compiled or executed:
 
 ```php
@@ -301,7 +307,76 @@ try {
 }
 ```
 
-Distance calculation, filtering, sorting, and result limiting happen in SQL. An unbounded nearest search can still calculate and sort distances for every eligible row: `limit(10)` limits returned rows, not rows examined. Ordinary numeric coordinate columns do not automatically provide spatial indexing. Use ordinary application filters to restrict eligible records and measure performance on your own data; the package does not yet add bounding-box candidate filtering or specialized index optimizations.
+## Performance
+
+When you search within a radius, Laravel Nearby adds latitude and longitude ranges covering the complete spherical search area. These ranges narrow the candidates before the exact Haversine condition. A rectangle also contains points outside the circle, so the exact distance comparison always remains in the query. `betweenDistances()` uses its maximum distance for the same preliminary filter and retains both exact boundaries.
+
+The ranges handle the antimeridian and poles and expand outward to account for floating-point rounding. The final distance threshold is never expanded. Zero-radius and global searches skip the box, as do numerically uncertain cases where a restrictive box would be unsafe. No candidate limit or implicit radius is added.
+
+Use ordinary application conditions to reduce eligible records and combine a radius with nearest ordering when your use case has a meaningful distance limit:
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+use Zarbinco\Nearby\Distance;
+
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+
+$branches = Branch::query()
+    ->where('is_active', true)
+    ->withinRadius($origin, Distance::fromKilometers(5))
+    ->nearestTo($origin, limit: 10)
+    ->get();
+```
+
+Filtering, sorting, and limiting happen in SQL. `nearestTo()` without a radius can still calculate and sort distances for every eligible row: `limit(10)` limits returned rows, not rows examined. A large radius or a dense local cluster can also leave many candidates. Select only the model attributes your application needs when transferring large payloads.
+
+### Optional Indexes
+
+Ordinary B-tree indexes can help MySQL use the preliminary coordinate ranges. Depending on your queries, useful candidates include separate latitude or longitude indexes, `(latitude, longitude)` or `(longitude, latitude)`, or an equality-filtered application column followed by coordinates, such as `(is_active, latitude, longitude)`.
+
+These are optional application decisions, not installation requirements. The package never creates indexes or modifies your schema. For example, an application that frequently filters active branches might evaluate this index in its own development environment:
+
+```sql
+CREATE INDEX branches_active_lat_lon
+    ON branches (is_active, latitude, longitude);
+```
+
+Index order matters. After an index range condition, another indexed column may help filter entries without further narrowing the scanned range. MySQL can prefer a table scan when much of the table matches. Compare plans and timings on representative data before choosing indexes; no layout guarantees the best plan, and ordinary numeric columns are not spatial indexes.
+
+### Inspecting Queries
+
+Use MySQL's `EXPLAIN` with the query's original bindings to inspect the chosen access path:
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+use Zarbinco\Nearby\Distance;
+
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+$query = Branch::query()
+    ->where('is_active', true)
+    ->withinRadius($origin, Distance::fromKilometers(5))
+    ->nearestTo($origin, limit: 10);
+
+$base = $query->toBase();
+$plan = $base->getConnection()->select(
+    'EXPLAIN FORMAT=JSON '.$base->toSql(),
+    $base->getBindings(),
+);
+```
+
+Inspect the selected key, estimated rows, and any sorting or temporary-table work. `EXPLAIN ANALYZE` executes the query and reports actual iterator activity; use it with care in a development environment. Plans and timings depend on data distribution, selectivity, existing indexes, query shape, and server load. Not every bounded search will be faster.
+
+### Optional Benchmarks
+
+The [benchmark guide](benchmarks/README.md) explains how to compare exact-distance queries with bounded searches on deterministic uniform and clustered datasets, using several ordinary index layouts. From a dedicated MySQL 8.4 development database configured through `DB_*` environment variables:
+
+```bash
+php benchmarks/benchmark.php --run --sizes=1000 --warmups=2 --repetitions=5
+```
+
+Larger datasets are opt-in. Keep benchmarks separate from production databases and routine CI; performance timings are measurements, not correctness assertions.
 
 ## Working with Coordinates
 

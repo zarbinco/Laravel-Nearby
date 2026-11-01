@@ -31,6 +31,12 @@ composer test:all
 
 Keep the SQL calculation aligned with the existing PHP calculator and its authoritative Earth-radius constant. Test ordinary coordinates, poles, antimeridian crossings, very short arcs, and antipodal cases with realistic floating-point tolerances. Compare unrounded results, and test boundary inclusion without widening the radius. Preserve Eloquent filters, global scopes, and soft deletes when composing queries, and cover bindings, safe identifiers, deterministic ordering, and saving models with computed distances.
 
+For changes to candidate selection, compare model IDs against the exact distance query as well as independent PHP calculations. Keep bounding ranges conservative and leave exact radius comparisons unchanged. Cover ordinary and proximity-loaded serialization, application visibility settings, and connection replacement when changing query preparation.
+
+## Performance Measurements
+
+Use the optional utility described in [benchmarks/README.md](benchmarks/README.md) with a dedicated MySQL 8.4 development database. Compare deterministic datasets, warm up queries, take repeated measurements, and inspect execution plans before drawing conclusions. Keep generated results outside tracked source. Larger datasets and timing comparisons do not belong in routine CI, and tests must not fail because a busy runner is slightly slower.
+
 ## Writing Documentation
 
 Write all public documentation in clear, natural English for developers using the library. Explain when a feature is useful, its inputs and units, its result, and relevant limitations. Include concise, executable PHP examples with the required imports and verify any stated numerical output. Document only working public APIs, keep comments focused on non-obvious decisions, and keep development progress reports and internal planning terminology out of public guides. Maintain one English documentation set rather than adding translated guides.
