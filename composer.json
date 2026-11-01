@@ -1,6 +1,6 @@
 {
     "name": "zarbinco/laravel-nearby",
-    "description": "Geographic distance calculations and unit conversions for Laravel and standalone PHP.",
+    "description": "Geographic distance calculations and Eloquent proximity queries for Laravel.",
     "type": "library",
     "license": "MIT",
     "authors": [
@@ -16,9 +16,11 @@
         "source": "https://github.com/zarbinco/Laravel-Nearby"
     },
     "require": {
-        "php": "^8.3"
+        "php": "^8.3",
+        "illuminate/database": "^13.0"
     },
     "require-dev": {
+        "orchestra/testbench": "^11.0",
         "phpunit/phpunit": "^12.5"
     },
     "conflict": {
@@ -73,6 +75,11 @@
     },
     "scripts": {
         "test": "@php vendor/bin/phpunit",
+        "test:integration": "@php vendor/bin/phpunit -c phpunit.integration.xml",
+        "test:all": [
+            "@test",
+            "@test:integration"
+        ],
         "test:compatibility": "@php tools/check-compatibility.php",
         "examples": [
             "@php examples/distance.php",

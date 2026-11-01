@@ -7,8 +7,9 @@
          failOnRisky="true"
          failOnWarning="true">
     <testsuites>
-        <testsuite name="Nearby">
+        <testsuite name="Standalone">
             <directory>tests</directory>
+            <exclude>tests/Integration</exclude>
         </testsuite>
     </testsuites>
     <source>

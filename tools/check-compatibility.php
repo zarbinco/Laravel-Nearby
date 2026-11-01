@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-// Local package fixtures exercise Composer's solver without downloading Laravel.
+// Local metadata fixtures exercise constraints and Laravel's replacement mechanism.
 $package = json_decode(file_get_contents(dirname(__DIR__).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
 $package['version'] = 'dev-main';
 $package['type'] = 'metapackage';
@@ -23,13 +23,15 @@ $cases = [
     ['Standalone PHP 8.3 is permitted', '8.3.0', null, null, true],
     ['Laravel 12 is rejected', '8.3.0', 'laravel/framework', '12.0.0', false],
     ['Laravel 13 is permitted', '8.3.0', 'laravel/framework', '13.0.0', true],
+    ['Illuminate database 12 is rejected', '8.3.0', 'illuminate/database', '12.0.0', false],
     ['Illuminate 12 components are rejected', '8.3.0', 'illuminate', '12.0.0', false],
     ['Illuminate 13 components are permitted', '8.3.0', 'illuminate', '13.0.0', true],
 ];
 
 try {
     foreach ($cases as [$description, $php, $dependency, $version, $shouldSucceed]) {
-        $packages = [$package];
+        $database = ['name' => 'illuminate/database', 'version' => '13.0.0', 'type' => 'metapackage'];
+        $packages = [$package, $database];
         $require = [$package['name'] => 'dev-main'];
 
         if ($dependency === 'laravel/framework') {
@@ -39,9 +41,17 @@ try {
             ), 'self.version');
             $packages[] = ['name' => $dependency, 'version' => $version, 'type' => 'metapackage', 'replace' => $replaces];
             $require[$dependency] = $version;
+
+            // With Laravel 13, only the framework can satisfy the database dependency.
+            if ($version === '13.0.0') {
+                $packages = array_values(array_filter($packages, static fn (array $metadata): bool => $metadata['name'] !== 'illuminate/database'));
+            }
+        } elseif ($dependency === 'illuminate/database') {
+            $packages = [$package, ['name' => $dependency, 'version' => $version, 'type' => 'metapackage']];
+            $require[$dependency] = $version;
         } elseif ($dependency === 'illuminate') {
             foreach (array_keys($package['conflict']) as $name) {
-                if (str_starts_with($name, 'illuminate/')) {
+                if (str_starts_with($name, 'illuminate/') && $name !== 'illuminate/database') {
                     $packages[] = ['name' => $name, 'version' => $version, 'type' => 'metapackage'];
                     $require[$name] = $version;
                 }
@@ -74,7 +84,13 @@ try {
             throw new RuntimeException($description." failed:\n".$output);
         }
 
-        if (!$shouldSucceed && !str_contains($output, $dependency === null ? 'php ^8.3' : 'conflicts with')) {
+        $expectedReason = match ($dependency) {
+            null => 'php ^8.3',
+            'illuminate/database' => 'requires illuminate/database ^13.0',
+            default => 'conflicts with',
+        };
+
+        if (!$shouldSucceed && !str_contains($output, $expectedReason)) {
             throw new RuntimeException($description." failed for an unexpected reason:\n".$output);
         }
 

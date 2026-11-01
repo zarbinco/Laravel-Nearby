@@ -14,9 +14,22 @@ composer test:compatibility
 composer examples
 ```
 
-The GitHub Actions matrix tests PHP 8.3, 8.4, and 8.5. The calculation core must continue to work through Composer autoloading alone, without Laravel bootstrapping, a database, or external services. Laravel 13.0 is the minimum permitted framework version; do not add compatibility code for older versions.
+The GitHub Actions configuration keeps standalone tests on PHP 8.3, 8.4, and 8.5, with a separate Laravel 13 job using a MySQL 8.4 service. The calculation core must continue to work through Composer autoloading alone, without Laravel bootstrapping, a database connection, or external services. The package requires Illuminate Database 13, and Laravel 13.0 is the minimum permitted framework version; do not add compatibility code for older versions.
 
 Use strict internal types, explicit validation at public input boundaries, immutable value objects, and small classes with clear responsibilities. Match the existing formatting. Add meaningful regression tests for behavior changes, use independent numerical references, and choose floating-point tolerances that reflect the calculation being tested. Never compare spherical calculations to ellipsoidal reference values as if they were the same model.
+
+## Database Tests
+
+Eloquent tests require real MySQL 8.4 and the PDO MySQL extension. Create a dedicated, disposable test database and set `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, and `DB_PASSWORD` in your shell. Keep credentials outside the repository. The suite drops and recreates `nearby_test_branches` and `nearby_test_custom_branches`; do not connect it to an application database.
+
+```bash
+composer test:integration
+composer test:all
+```
+
+`composer test` remains independent of database availability. Do not substitute SQLite or mocked queries for MySQL integration coverage. Use small test-only schemas created inside the test environment; package migrations and consumer schema changes are unnecessary.
+
+Keep the SQL calculation aligned with the existing PHP calculator and its authoritative Earth-radius constant. Test ordinary coordinates, poles, antimeridian crossings, very short arcs, and antipodal cases with realistic floating-point tolerances. Compare unrounded results, and test boundary inclusion without widening the radius. Preserve Eloquent filters, global scopes, and soft deletes when composing queries, and cover bindings, safe identifiers, deterministic ordering, and saving models with computed distances.
 
 ## Writing Documentation
 

@@ -1,13 +1,20 @@
 # Laravel Nearby
 
-Laravel Nearby calculates the geographic distance between latitude and longitude coordinates and converts distances between common units. Its calculation core is plain PHP: Composer autoloading is enough, with no application bootstrapping, database, or external service required.
+Laravel Nearby adds geographic proximity queries to existing Eloquent models and converts distances between common units. Use your model's latitude and longitude columns to find nearby records, search within a radius, and order results by distance.
+
+Its calculation core also works through Composer autoloading alone, without Laravel bootstrapping, a database connection, or an external service.
 
 ## Requirements
 
 - PHP 8.3 or later within the PHP 8 series.
-- Laravel 13.0 or later when installed in a Laravel application. Laravel 12 and earlier, including older standalone Illuminate components, are rejected by Composer.
+- Laravel 13.x, with 13.0 as the minimum version, for Eloquent integration. Laravel 12 and earlier, including older standalone Illuminate components, are rejected by Composer.
+- MySQL 8.4.x and the PDO MySQL extension for proximity queries.
 
-The calculation core has no Laravel runtime dependency. Automated testing covers PHP 8.3, 8.4, and 8.5. Composer compatibility checks verify Laravel 13 dependency resolution; they do not constitute Laravel integration tests. Future Laravel major versions are permitted by the constraints but have not been verified.
+The package requires `illuminate/database:^13.0`; Laravel 13 satisfies that dependency through its normal Composer replacement mechanism. The full Laravel framework is a development dependency through Orchestra Testbench, rather than a runtime requirement. Standalone calculations do not require an application or database connection.
+
+CI is configured to run the standalone suite on PHP 8.3, 8.4, and 8.5, and Laravel 13 integration tests against MySQL 8.4 on PHP 8.3. Other Laravel major versions and database engines are currently unsupported.
+
+Database integration has been verified locally with Laravel 13.39.0, MySQL 8.4.3, and PHP 8.3.30.
 
 ## Installation
 
@@ -68,6 +75,233 @@ printf("%.3f km\n", $distance->in(Unit::Kilometer));
 ```
 
 This example displays `43.920 km`.
+
+## Eloquent Models
+
+Add `HasNearbyCoordinates` to an existing model:
+
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Zarbinco\Nearby\Eloquent\Concerns\HasNearbyCoordinates;
+
+class Branch extends Model
+{
+    use HasNearbyCoordinates;
+}
+```
+
+The defaults are `latitude` and `longitude`, stored in decimal degrees in ordinary numeric `DOUBLE` or `DECIMAL` columns. Existing columns can be used directly; the package does not require migrations, additional tables, or spatial columns. Your model keeps its usual table name, primary key, casts, relationships, global scopes, and soft-delete behavior.
+
+Override the protected column methods when your schema uses different names:
+
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Zarbinco\Nearby\Eloquent\Concerns\HasNearbyCoordinates;
+
+class Warehouse extends Model
+{
+    use HasNearbyCoordinates;
+
+    protected function nearbyLatitudeColumn(): string
+    {
+        return 'lat';
+    }
+
+    protected function nearbyLongitudeColumn(): string
+    {
+        return 'lng';
+    }
+}
+```
+
+Configure bare column names in trusted model code. Identifiers must start with a letter or underscore and contain only letters, digits, and underscores. Qualified names, SQL expressions, and user-supplied column names are unsupported. The package qualifies identifiers with the model table and quotes them using Laravel's query grammar. No service provider or facade registration is needed.
+
+## Finding Nearby Records
+
+These examples run inside a Laravel application with the `Branch` model above and its existing database table.
+
+### Nearest Branches
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+
+$branches = Branch::query()
+    ->where('is_active', true)
+    ->nearestTo($origin, limit: 10)
+    ->get();
+```
+
+`nearestTo()` returns up to the requested number of eligible models, ordered from nearest to farthest, with the model key ascending to break equal-distance ties. It adds the computed distance to each result. The limit defaults to 10 and must be a positive PHP integer; zero, negative values, numeric strings, floats, and booleans are rejected.
+
+There is no implicit maximum radius. The nearest record can be far away; fewer than ten eligible records produce fewer than ten results. Existing filters remain in effect. `nearestTo()` clears earlier ordering so distance is the primary ordering; ordering added afterward is appended to the resulting distance and key order.
+
+### Within a Radius
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+use Zarbinco\Nearby\Distance;
+
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+$radius = Distance::fromKilometers(5);
+
+$branches = Branch::query()
+    ->where('is_active', true)
+    ->withinRadius($origin, $radius)
+    ->get();
+
+$nearestBranches = Branch::query()
+    ->where('is_active', true)
+    ->withinRadius($origin, $radius)
+    ->nearestTo($origin, limit: 10)
+    ->get();
+```
+
+Radius filtering includes the boundary. Combining it with `nearestTo()` returns at most ten matching records inside that radius; it never expands the radius to fill the limit. `withinRadius()` alone does not select the computed distance or change ordering.
+
+A zero radius includes coincident coordinates, duplicate locations, equivalent -180/+180 longitudes, and the same pole regardless of longitude. It does not apply a tolerance that turns nearby distinct locations into coincident points.
+
+### Between Distances
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+use Zarbinco\Nearby\Distance;
+
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+
+$branches = Branch::query()
+    ->betweenDistances(
+        $origin,
+        min: Distance::fromKilometers(2),
+        max: Distance::fromKilometers(10),
+    )
+    ->orderByDistance($origin)
+    ->get();
+```
+
+Both boundaries are inclusive. Equal minimum and maximum distances are allowed, as is a minimum of zero. A minimum greater than the maximum raises `InvalidDistanceException`; values are never silently swapped.
+
+### Ordering and Reading Distances
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+use Zarbinco\Nearby\Unit;
+
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+
+$branches = Branch::query()
+    ->withDistance($origin)
+    ->orderByDistance($origin, direction: 'desc')
+    ->get();
+
+foreach ($branches as $branch) {
+    $meters = $branch->nearby_distance_meters;
+    $distance = $branch->nearbyDistance();
+
+    if ($distance !== null) {
+        printf(
+            "%s: %.2f km (%.2f mi)\n",
+            $branch->name,
+            $distance->in(Unit::Kilometer),
+            $distance->in(Unit::Mile),
+        );
+    }
+}
+```
+
+`orderByDistance()` accepts `asc` or `desc`, case-insensitively, and excludes records with missing or invalid coordinates. It appends distance ordering and an ascending model-key tie-breaker to existing `orderBy()` clauses. Use `reorder()->orderByDistance(...)` when distance should replace earlier ordering. This scope does not select the computed distance; add `withDistance()` when you need it.
+
+`withDistance()` preserves the original models and selected attributes. Called alone, it retains records with null or out-of-range coordinates and returns a null distance for them. Valid distances are unrounded PHP floats in meters, compatible with `Distance::fromMeters()`. `nearbyDistance()` returns the corresponding immutable `Distance` object, or null when no computed result is available. All six distance units remain available.
+
+The read-only `nearby_distance_meters` property is a virtual attribute included in model serialization. The trait keeps it outside Eloquent's persisted attributes, so updating and saving the model, including `saveQuietly()`, does not write it to the database. Assigning it raises `LogicException`. The value describes the query result at the time it was retrieved; changing coordinates, saving, or calling `refresh()` does not recalculate it. Run a new `withDistance()` query when you need an updated result. A newly loaded model without `withDistance()` has a null distance.
+
+Reserve `nearby_distance_meters` for this property. Do not define a real column, default attribute, cast, accessor, or selected SQL alias with that name. Conflicting selections already present when `withDistance()` is called raise `InvalidArgumentException`; conflicting model attributes or casts, and conflicting selected attributes or real columns encountered during result hydration, raise `LogicException`. The package does not inspect database schemas to discover conflicts before querying.
+
+Choose explicit columns before adding the distance:
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+
+$branches = Branch::query()
+    ->select(['branches.id', 'branches.name'])
+    ->withDistance($origin)
+    ->get();
+```
+
+Calling `select()` afterward replaces the computed selection and raises `LogicException` when affected models are hydrated. Use `addSelect()` to append columns. Repeated `withDistance()` calls expose the result from the last supplied origin; filters and ordering retain the origins passed to their own scopes.
+
+### Pagination and Aggregates
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+use Zarbinco\Nearby\Distance;
+
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+
+$query = Branch::query()
+    ->where('is_active', true)
+    ->withinRadius($origin, Distance::fromKilometers(5));
+
+$count = (clone $query)->count();
+$hasBranches = (clone $query)->exists();
+$closest = (clone $query)->nearestTo($origin, limit: 1)->first();
+
+$page = (clone $query)
+    ->withDistance($origin)
+    ->orderByDistance($origin)
+    ->paginate(20);
+```
+
+Use radius or distance-band filtering with ordinary `paginate()`; choose its page size through `paginate()`. `nearestTo()` is intended for a limited result set retrieved with `get()` or `first()`.
+
+## Query Behavior and Limits
+
+| Method | Filters invalid or missing coordinates | Adds computed distance | Ordering |
+| --- | --- | --- | --- |
+| `withDistance($origin)` | No; distance is null | Yes | Unchanged |
+| `orderByDistance($origin, $direction)` | Yes | No | Appends distance and model key |
+| `withinRadius($origin, $radius)` | Yes | No | Unchanged |
+| `betweenDistances($origin, $min, $max)` | Yes | No | Unchanged |
+| `nearestTo($origin, $limit)` | Yes | Yes | Replaces earlier ordering with distance and model key |
+
+All methods return a normal Eloquent builder and keep ordinary conditions, global scopes, and soft-delete filters. Radius and distance-band conditions execute in MySQL and work with `count()`, `exists()`, `first()`, `get()`, and normal pagination. SQL uses parameter bindings for coordinates and distance thresholds; no values are rounded before filtering.
+
+Basic joins are supported: coordinate columns are qualified with the model table, and the default selection is the model's `table.*`, so joined-table attributes are not selected automatically. Keep the model table as the query's `FROM` source. Model table aliases, subquery `FROM` sources, schema-qualified table names, grouped queries, unions, distinct projections, custom raw result shapes, and cursor pagination are outside the supported query contract. A join that produces duplicate model rows retains normal SQL behavior.
+
+MySQL 8.4.x is the supported query engine. PostgreSQL, SQLite, MariaDB, and other MySQL versions raise `UnsupportedDatabaseException`; unsupported drivers are rejected before executing the geographic SQL, and server versions are checked when the query is compiled or executed:
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Coordinate;
+use Zarbinco\Nearby\Exceptions\UnsupportedDatabaseException;
+
+try {
+    $branches = Branch::query()
+        ->nearestTo(new Coordinate(latitude: 35.6892, longitude: 51.3890))
+        ->get();
+} catch (UnsupportedDatabaseException $exception) {
+    report($exception);
+}
+```
+
+Distance calculation, filtering, sorting, and result limiting happen in SQL. An unbounded nearest search can still calculate and sort distances for every eligible row: `limit(10)` limits returned rows, not rows examined. Ordinary numeric coordinate columns do not automatically provide spatial indexing. Use ordinary application filters to restrict eligible records and measure performance on your own data; the package does not yet add bounding-box candidate filtering or specialized index optimizations.
 
 ## Working with Coordinates
 
@@ -215,6 +449,10 @@ The Haversine formula calculates a great-circle surface distance using a fixed s
 
 Calculations use PHP floating-point arithmetic. Defined conversion factors are used without intentional rounding, but decimal numbers and conversions remain subject to normal binary floating-point limits. Very small values can underflow to zero; nearly antipodal points lose some precision and can round to the half-circumference. Results remain finite and bounded by that half-circumference. Round only when presenting results, according to your application's needs.
 
+MySQL queries use the same radius and Haversine model as the PHP calculator, with clamped intermediate values and no SQL rounding. The two math runtimes can differ slightly. The integration suite uses micrometer-scale absolute tolerances for ordinary examples, smaller tolerances for short arcs, and up to 0.5 meters for difficult oblique antipodal examples. These tolerances describe numerical comparisons, not the accuracy of a spherical model against Earth's real shape.
+
+Stored coordinate precision also matters: a `DECIMAL` column rounds values to its configured scale before calculation. Radius and distance-band boundaries compare MySQL's unrounded result directly with the supplied distance in meters. There is no boundary expansion to compensate for differences between PHP and MySQL.
+
 ## Running Tests
 
 From the package directory:
@@ -227,7 +465,23 @@ composer test:compatibility
 composer examples
 ```
 
-The tests cover validation (including weakly typed callers), immutability, unit conversions and overflow, and geographic edge cases against analytic references. Compatibility checks use Composer's dependency solver with isolated package fixtures and do not install Laravel. GitHub Actions runs the suite on PHP 8.3, 8.4, and 8.5 without database services.
+`composer test` runs the standalone suite without connecting to a database. It covers validation (including weakly typed callers), immutability, unit conversions and overflow, and geographic edge cases against analytic references. `composer test:compatibility` exercises Composer constraints and Laravel's Illuminate replacement behavior using isolated metadata fixtures.
+
+For Eloquent integration tests, prepare a dedicated, disposable **MySQL 8.4** database and configure its connection. The tests drop and recreate `nearby_test_branches` and `nearby_test_custom_branches`; never point them at an application or production database.
+
+In Bash, set the connection values for that test database and enter its password when prompted:
+
+```bash
+export DB_HOST=127.0.0.1
+export DB_PORT=3306
+export DB_DATABASE=nearby_test
+export DB_USERNAME=nearby_test
+read -s -p 'Test database password: ' DB_PASSWORD
+export DB_PASSWORD
+composer test:integration
+```
+
+Use your shell's environment-variable syntax on other platforms, and keep credentials outside tracked files. `composer test:all` runs both suites with the same database environment. The integration suite executes real SQL through Laravel and Orchestra Testbench; it checks filters, ordering, precision, query composition, model behavior, and input safety. The CI configuration includes a separate MySQL 8.4 service for these tests.
 
 The executable files in `examples/` demonstrate distance calculation, conversions, direct construction, and exception handling using Composer autoloading alone.
 
