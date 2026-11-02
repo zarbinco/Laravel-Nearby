@@ -13,6 +13,7 @@ Its calculation core also works through Composer autoloading alone, without Lara
 
 - Immutable coordinates with explicit validation and spherical geographic distance calculations.
 - Immutable viewport bounds with inclusive edges, wrapped longitudes, and standalone containment checks.
+- Grouped viewport reports with explicit SQL projections, counts, and `HAVING` filters.
 - Six distance units with unrounded conversions and overflow validation.
 - Eloquent nearest, radius, distance-band, and distance-ordering queries using existing numeric columns.
 - Read-only calculated distances, normal pagination, and configurable coordinate column names.
@@ -295,6 +296,45 @@ $count = Branch::query()->withinBounds($bounds)->count();
 
 Both viewport and radius restrictions remain active. Repeated `withinBounds()` calls intersect their rectangles. The scope never expands the requested viewport, and it uses the same MySQL 8.4 connection and reconnection checks as distance queries.
 
+### Grouping Results Within a Viewport
+
+Use an explicit grouped projection to count matching records by tenant:
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Bounds;
+
+$bounds = new Bounds(south: 35.60, west: 51.20, north: 35.80, east: 51.50);
+
+$results = Branch::query()
+    ->select('tenant_id')
+    ->selectRaw('COUNT(*) AS total')
+    ->where('is_active', true)
+    ->withinBounds($bounds)
+    ->groupBy('tenant_id')
+    ->havingRaw('COUNT(*) > ?', [1])
+    ->orderBy('tenant_id')
+    ->get();
+```
+
+The viewport and other `WHERE` conditions filter rows before `GROUP BY`; `HAVING` then filters the aggregated groups. This example returns tenants with more than one active record inside the viewport. Invalid and null coordinates are excluded, and the model's global scopes and soft-delete conditions still apply. All filtering and aggregation run in MySQL without calculating distance.
+
+Select every grouped column and aggregate expression explicitly. Under MySQL's `ONLY_FULL_GROUP_BY` mode, selecting the default `table.*` while grouping only by `tenant_id` is invalid. `withinBounds()` preserves explicit selections, so these chaining orders are supported:
+
+- `select()->selectRaw()->withinBounds()->groupBy()`
+- `select()->selectRaw()->groupBy()->withinBounds()`
+- `withinBounds()->select()->selectRaw()->groupBy()`
+
+In the last form, `select()` replaces the scope's default `table.*`. Calling only `selectRaw()` after `withinBounds()` appends expressions to that default selection; it does not replace it. Use `select()` to establish a SQL-compliant grouped projection instead of disabling strict mode. Additional `WHERE` and `HAVING` conditions, multiple grouping columns, repeated viewport filters, and cloned builders retain normal SQL semantics.
+
+Eloquent hydrates these rows as partial reporting results containing the selected fields, such as `tenant_id` and `total`. They are not complete branch records; do not save them or rely on unselected model attributes. Use the explicit `COUNT(*) AS total` selection and `get()` when you need every group's count.
+
+Laravel's grouped `count()` returns one integer, not a map of counts. Without `HAVING`, it returns the count from the first returned group, whose identity depends on the query's ordering. For the explicit grouped projection above, `HAVING` makes Laravel wrap the grouped query, so `count()` returns the number of qualifying groups. These are different totals; retrieve the grouped rows when you need each group's aggregate.
+
+Grouped `paginate()` is supported for these explicit viewport projections. Replace `get()` with `paginate(20)` in the example to page through report rows; the paginator's `total()` counts groups remaining after `HAVING`, not their underlying records. Order by all grouping columns for stable page results. Both the pagination count and result queries retain MySQL connection and reconnection validation.
+
+This support covers viewport reports with ordinary grouped columns and aggregate projections. Grouped calculated-distance hydration, distance ordering, and nearest-record queries are outside this contract.
+
 ### Receiving a Viewport from a Frontend
 
 HTTP inputs commonly arrive as strings, so validate them and explicitly convert them before constructing bounds. This invokable controller expects continuous unwrapped endpoints and uses application limits of 20 degrees per axis, longitude offsets within -540 to 540, and 50 records per page:
@@ -463,7 +503,7 @@ The following retrieval methods also preserve geographic filtering and ordering.
 
 All methods return a normal Eloquent builder and keep ordinary conditions, global scopes, and soft-delete filters. Radius, distance-band, and viewport conditions execute in MySQL and work with `count()`, `exists()`, `first()`, `get()`, and normal pagination. SQL uses parameter bindings for coordinates, bounds, and distance thresholds; no values are rounded before filtering.
 
-Basic joins are supported: coordinate columns are qualified with the model table, and the default selection is the model's `table.*`, so joined-table attributes are not selected automatically. Keep the model table as the query's `FROM` source. Model table aliases, subquery `FROM` sources, schema-qualified table names, grouped queries, unions, distinct projections, custom raw result shapes, and cursor pagination are outside the supported query contract. A join that produces duplicate model rows retains normal SQL behavior.
+Basic joins are supported: coordinate columns are qualified with the model table, and the default selection is the model's `table.*`, so joined-table attributes are not selected automatically. Keep the model table as the query's `FROM` source. Grouped viewport reports require the explicit projections described in [Grouping Results Within a Viewport](#grouping-results-within-a-viewport). Other grouped query shapes, model table aliases, subquery `FROM` sources, schema-qualified table names, unions, distinct projections, other custom raw result shapes, and cursor pagination are outside the supported query contract. A join that produces duplicate model rows retains normal SQL behavior.
 
 Application global scopes follow Laravel's normal `withoutGlobalScopes()` behavior. Connection validation remains attached to geographic queries and their clones.
 
