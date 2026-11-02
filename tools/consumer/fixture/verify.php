@@ -12,6 +12,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Zarbinco\Nearby\Bounds;
 use Zarbinco\Nearby\Coordinate;
 use Zarbinco\Nearby\Distance;
 use Zarbinco\Nearby\Geo;
@@ -189,10 +190,69 @@ try {
     DB::purge();
     $check(DB::connection()->getPdo() !== $previousPdo, 'Purging the connection must replace the physical PDO.');
     $check($keys(Branch::query()->nearestTo($origin)->get()) === $expectedNearest, 'Queries must work after a real database reconnection.');
+
+    $bounds = new Bounds(south: 0, west: 0, north: 0, east: 0.03);
+    $check($bounds->contains(new Coordinate(0, 0.01)), 'Standalone bounds containment must autoload in a consumer.');
+    $check(!$bounds->contains(new Coordinate(0, 0.04)), 'Standalone bounds must retain their exact longitude edge.');
+    $viewportQuery = Branch::query()->where('is_active', true)->withinBounds($bounds);
+    $check($viewportQuery->getQuery()->orders === null && $viewportQuery->getQuery()->limit === null,
+        'Viewport filtering must not add ordering or a limit.');
+    $check(preg_match('/\b(?:SIN|COS|ATAN2|SQRT|POWER|RADIANS)\s*\(/i', $viewportQuery->toSql()) === 0,
+        'Viewport-only SQL must not calculate geographic distance.');
+    $viewportRows = (clone $viewportQuery)->orderBy('id')->get();
+    $check($keys($viewportRows) === [$here->id, $near->id, $band->id],
+        'Viewport filtering must preserve application, tenant, and soft-delete conditions.');
+    $check(!array_key_exists('nearby_distance_meters', $viewportRows->first()->toArray()),
+        'Viewport-only results must not gain a computed distance field.');
+    $selectedViewport = Branch::query()->select(['nearby_consumer_branches.id', 'nearby_consumer_branches.name'])
+        ->whereKey($near->id)->withinBounds($bounds)->firstOrFail();
+    $check(array_keys($selectedViewport->getAttributes()) === ['id', 'name'], 'Viewport filtering must preserve explicit selections.');
+    $check((clone $viewportQuery)->count() === 3, 'Viewport counts must execute in MySQL.');
+    $check((clone $viewportQuery)->exists(), 'Viewport existence queries must execute in MySQL.');
+    $viewportPage = (clone $viewportQuery)->orderBy('id')->paginate(2, ['*'], 'page', 2);
+    $check($viewportPage->total() === 3 && $viewportPage->count() === 1 && $viewportPage->items()[0]->id === $band->id,
+        'Viewport pagination must preserve counts and offsets.');
+    $check($keys((clone $viewportQuery)->withinBounds(new Bounds(0, 0.005, 0, 0.02))->get()) === [$near->id],
+        'Repeated viewport filters must intersect.');
+    $check($keys((clone $viewportQuery)->withinRadius($origin, Distance::fromKilometers(2))->orderBy('id')->get()) === [$here->id, $near->id],
+        'Viewport and precise radius filtering must both remain active.');
+    $viewportNearest = (clone $viewportQuery)->nearestTo(new Coordinate(0, 0.1), limit: 1)->firstOrFail();
+    $check($viewportNearest->id === $band->id && is_float($viewportNearest->nearby_distance_meters),
+        'Nearest results must remain restricted to the viewport and hydrate distance.');
+    $limitedViewport = (clone $viewportQuery)->orderBy('id', 'desc')->offset(1)->limit(1)->get();
+    $check($keys($limitedViewport) === [$near->id], 'Viewport filtering must preserve ordinary ordering, offsets, and limits.');
+    $check(Warehouse::query()->withinBounds(new Bounds(0, 0.005, 0, 0.02))->firstOrFail()->code === 'warehouse-a',
+        'Viewport filtering must use configured DECIMAL coordinate columns.');
+    $check($keys(Branch::query()->withinBounds(new Bounds(0, 0, 0, 0))->get()) === [$here->id],
+        'Zero-width and zero-height bounds must not become a full-world query.');
+
+    $positiveSeam = $seed('Positive antimeridian', 180);
+    $negativeSeam = $seed('Negative antimeridian', -180);
+    $insideWrapped = $seed('Inside wrapped viewport', 179);
+    $outsideWrapped = $seed('Outside wrapped viewport', 160);
+    $wrappedBounds = Bounds::fromViewport(south: -1, west: 175, north: 1, east: 185);
+    $check($wrappedBounds->west === 175.0 && $wrappedBounds->east === -175.0 && $wrappedBounds->crossesAntimeridian(),
+        'Continuous unwrapped map coordinates must retain their viewport extent.');
+    $check($keys(Branch::query()->withinBounds($wrappedBounds)->orderBy('id')->get()) === [$positiveSeam->id, $negativeSeam->id, $insideWrapped->id],
+        'Wrapped viewport SQL must include both stored antimeridian signs.');
+    $check($keys(Branch::query()->withinBounds(new Bounds(0, 180, 0, -180))->orderBy('id')->get()) === [$positiveSeam->id, $negativeSeam->id],
+        'The reversed signed endpoint pair must match only the antimeridian.');
+    $check($keys(Branch::query()->withinBounds(new Bounds(0, -180, 0, -170))->orderBy('id')->get()) === [$positiveSeam->id, $negativeSeam->id],
+        'An ordinary viewport touching -180 must also include +180.');
+    $worldRows = Branch::query()->whereIn('id', [$here->id, $missing->id, $invalidCoordinates->id, $positiveSeam->id, $negativeSeam->id])
+        ->withinBounds(new Bounds(-90, -180, 90, 180))->orderBy('id')->get();
+    $check($keys($worldRows) === [$here->id, $positiveSeam->id, $negativeSeam->id],
+        'A full-world viewport must still exclude null and invalid coordinates.');
+    $seamPoints = [[$positiveSeam->id, 180], [$negativeSeam->id, -180], [$insideWrapped->id, 179], [$outsideWrapped->id, 160]];
+    $expectedWrapped = array_column(array_values(array_filter($seamPoints,
+        static fn (array $point): bool => $wrappedBounds->contains(new Coordinate(0, $point[1])))), 0);
+    $check($keys(Branch::query()->whereIn('id', array_column($seamPoints, 0))->withinBounds($wrappedBounds)->orderBy('id')->get()) === $expectedWrapped,
+        'SQL viewport results must agree with standalone containment for the same coordinates.');
+
     echo json_encode([
         'completed' => true, 'assertions' => $assertions, 'php' => PHP_VERSION,
         'laravel' => $app->version(), 'mysql' => $version,
-        'checks' => ['composer_autoload', 'standalone_core', 'eloquent_scopes', 'custom_decimal_columns', 'relationships',
+        'checks' => ['composer_autoload', 'standalone_core', 'eloquent_scopes', 'viewport_bounds', 'custom_decimal_columns', 'relationships',
             'tenant_global_scope', 'soft_deletes', 'pagination', 'model_saving', 'serialization', 'repeated_http_requests', 'pdo_reconnection'],
     ], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR), "\n";
 } finally {

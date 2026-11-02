@@ -19,7 +19,7 @@ This is not a claim that every Laravel 13 version has been tested. An explicit `
 
 The local checkout receives a `dev-main` version only in the consumer's path-repository options. No global stability setting or published package metadata is changed. Composer uses a symlink or Windows junction to the checkout, so current source changes remain visible to the disposable consumer.
 
-Each application runs in separate PHP processes using its own `vendor/autoload.php`. The runner verifies Artisan boot, audits the installed dependency set, and exercises the standalone API, all documented query scopes, custom DECIMAL columns, string keys, relationships, tenant scopes, soft deletes, pagination, model saving, serialization, repeated HTTP JSON responses, and a real PDO reconnection. Assertions fail the command immediately, and fixture tables are removed in a `finally` block.
+Each application runs in separate PHP processes using its own `vendor/autoload.php`. The runner verifies Artisan boot, audits the installed dependency set, and exercises the standalone API, all documented query scopes, custom DECIMAL columns, string keys, relationships, tenant scopes, soft deletes, pagination, model saving, serialization, repeated HTTP JSON responses, and a real PDO reconnection. Viewport checks include wrapped and signed antimeridian endpoints, exact containment, full-world validation, zero extents, and composition with distance queries. Assertions fail the command immediately, and fixture tables are removed in a `finally` block.
 
 To run the same installed dependency set with another PHP interpreter, use `--verify-existing`:
 

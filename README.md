@@ -5,13 +5,14 @@
 [![License](https://img.shields.io/github/license/zarbinco/Laravel-Nearby)](https://packagist.org/packages/zarbinco/laravel-nearby)
 [![Tests](https://github.com/zarbinco/Laravel-Nearby/actions/workflows/tests.yml/badge.svg)](https://github.com/zarbinco/Laravel-Nearby/actions/workflows/tests.yml)
 
-Laravel Nearby adds geographic proximity queries to existing Eloquent models and converts distances between common units. Use your model's latitude and longitude columns to find nearby records, search within a radius, and order results by distance.
+Laravel Nearby adds geographic proximity queries to existing Eloquent models and converts distances between common units. Use your model's latitude and longitude columns to filter a map viewport, find nearby records, search within a radius, and order results by distance.
 
 Its calculation core also works through Composer autoloading alone, without Laravel bootstrapping, a database connection, or an external service.
 
 ## Features
 
 - Immutable coordinates with explicit validation and spherical geographic distance calculations.
+- Immutable viewport bounds with inclusive edges, wrapped longitudes, and standalone containment checks.
 - Six distance units with unrounded conversions and overflow validation.
 - Eloquent nearest, radius, distance-band, and distance-ordering queries using existing numeric columns.
 - Read-only calculated distances, normal pagination, and configurable coordinate column names.
@@ -202,6 +203,160 @@ $branches = Branch::query()
 
 Both boundaries are inclusive. Equal minimum and maximum distances are allowed, as is a minimum of zero. A minimum greater than the maximum raises `InvalidDistanceException`; values are never silently swapped.
 
+### Within a Map Viewport
+
+| Radius filtering | Viewport filtering |
+| :---: | :---: |
+| <img src="docs/images/within-radius.svg" width="270" height="210" alt="Circular radius search with matching points inside the circle"> | <img src="docs/images/within-bounds.svg" width="270" height="210" alt="Rectangular map viewport with matching points inside its bounds"> |
+| `withinRadius()` measures distance from an origin. | `withinBounds()` checks the rectangle's edges without calculating distance. |
+
+`Bounds` represents an exact latitude/longitude rectangle in decimal degrees. Its argument order is **south, west, north, east**:
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Bounds;
+use Zarbinco\Nearby\Coordinate;
+
+$bounds = new Bounds(
+    south: 35.60,
+    west: 51.20,
+    north: 35.80,
+    east: 51.50,
+);
+
+$inside = $bounds->contains(new Coordinate(latitude: 35.6892, longitude: 51.3890));
+
+$branches = Branch::query()
+    ->where('is_active', true)
+    ->withinBounds($bounds)
+    ->orderBy('id')
+    ->limit(100)
+    ->get();
+```
+
+`$inside` is true. All four borders are inclusive. The public `south`, `west`, `north`, and `east` properties are immutable floats. Inputs must be finite PHP integers or floats: latitude must be between -90 and 90, longitude between -180 and 180, and south must not exceed north. Invalid inputs raise `InvalidCoordinateException`, including numeric strings supplied by a weakly typed caller.
+
+Longitude ordering defines the interval. With west less than or equal to east, it is an ordinary interval; west greater than east crosses the antimeridian. `crossesAntimeridian()` reports this endpoint ordering, including the degenerate interval from +180 to -180. Latitude and longitude ranges apply independently, including at the poles.
+
+Unlike a `Coordinate`, a `Bounds` object preserves signed longitude endpoints. Both -180 and +180 represent the same meridian when testing a point or filtering stored records:
+
+| West / east | Longitude coverage |
+| --- | --- |
+| -180 / +180 | All valid longitudes |
+| +180 / -180 | Only the antimeridian, including either stored sign |
+| -180 / -170 | From the antimeridian through -170, including +180 |
+| 170 / +180 | From 170 through the antimeridian, including -180 |
+| 170 / -170 | A wrapped interval across the antimeridian |
+| 30 / 30 | Only longitude 30 |
+
+Equal west/east is a zero-width meridian, and equal south/north is a zero-height latitude interval. Neither expands to cover the world. `contains()` performs exact comparisons without a tolerance and works through Composer autoloading alone.
+
+### Unwrapped Map Coordinates
+
+Map libraries can return continuous longitudes outside the usual -180 to 180 range. Use `fromViewport()` for these values:
+
+```php
+use Zarbinco\Nearby\Bounds;
+
+$bounds = Bounds::fromViewport(south: -20, west: 175, north: 20, east: 185);
+
+echo $bounds->west; // 175
+echo $bounds->east; // -175
+```
+
+This factory requires east greater than or equal to west **before** normalization. Multiple world offsets are supported: -540 to -530 becomes -180 to -170. A span of 360 degrees or more covers every valid longitude; 10 to 370 becomes the full-world pair -180/+180. An equal pair remains a zero-width meridian.
+
+The factory uses the same strict input and latitude validation as the constructor. It rejects unwrapped longitude magnitudes greater than 9,007,199,254,740,991 (`2^53 - 1`) and numerically unsafe representations instead of guessing an extent. Use the direct constructor for explicitly wrapped pairs such as west 170, east -170; that pair is not a continuous input for `fromViewport()`.
+
+### Combining Viewports and Distances
+
+`withinBounds()` adds SQL range conditions only. It excludes null and out-of-range stored coordinates, including for a full-world viewport. It does not calculate or select distance, reorder results, or add a limit. Existing selects, filters, global scopes, soft deletes, limits, offsets, and supported joins remain in effect; custom coordinate columns use the same model configuration as other proximity scopes. No migration, spatial column, or external mapping API is required.
+
+```php
+use App\Models\Branch;
+use Zarbinco\Nearby\Bounds;
+use Zarbinco\Nearby\Coordinate;
+use Zarbinco\Nearby\Distance;
+
+$bounds = new Bounds(south: 35.60, west: 51.20, north: 35.80, east: 51.50);
+$origin = new Coordinate(latitude: 35.6892, longitude: 51.3890);
+
+$page = Branch::query()
+    ->where('is_active', true)
+    ->withinBounds($bounds)
+    ->withinRadius($origin, Distance::fromKilometers(5))
+    ->withDistance($origin)
+    ->orderByDistance($origin)
+    ->paginate(20);
+
+$nearest = Branch::query()->withinBounds($bounds)->nearestTo($origin, limit: 10)->get();
+$count = Branch::query()->withinBounds($bounds)->count();
+```
+
+Both viewport and radius restrictions remain active. Repeated `withinBounds()` calls intersect their rectangles. The scope never expands the requested viewport, and it uses the same MySQL 8.4 connection and reconnection checks as distance queries.
+
+### Receiving a Viewport from a Frontend
+
+HTTP inputs commonly arrive as strings, so validate them and explicitly convert them before constructing bounds. This invokable controller expects continuous unwrapped endpoints and uses application limits of 20 degrees per axis, longitude offsets within -540 to 540, and 50 records per page:
+
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Branch;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
+use Zarbinco\Nearby\Bounds;
+use Zarbinco\Nearby\Exceptions\InvalidCoordinateException;
+
+final class BranchViewportController
+{
+    public function __invoke(Request $request): JsonResponse
+    {
+        $input = $request->validate([
+            'south' => ['required', 'numeric'],
+            'west' => ['required', 'numeric'],
+            'north' => ['required', 'numeric'],
+            'east' => ['required', 'numeric'],
+        ]);
+
+        foreach ($input as $name => $value) {
+            $input[$name] = (float) $value;
+
+            if (!is_finite($input[$name])) {
+                throw ValidationException::withMessages([$name => 'Use a finite coordinate.']);
+            }
+        }
+
+        try {
+            $bounds = Bounds::fromViewport(
+                south: $input['south'], west: $input['west'],
+                north: $input['north'], east: $input['east'],
+            );
+        } catch (InvalidCoordinateException $exception) {
+            throw ValidationException::withMessages(['viewport' => $exception->getMessage()]);
+        }
+
+        if (abs($input['west']) > 540 || abs($input['east']) > 540
+            || $input['east'] - $input['west'] > 20 || $input['north'] - $input['south'] > 20) {
+            throw ValidationException::withMessages(['viewport' => 'Zoom in or recenter the map.']);
+        }
+
+        return response()->json(Branch::query()
+            ->select(['id', 'name', 'latitude', 'longitude'])
+            ->where('is_active', true)
+            ->withinBounds($bounds)
+            ->orderBy('id')
+            ->simplePaginate(50)
+            ->withQueryString());
+    }
+}
+```
+
+The simple paginator avoids a total-count query for each map update. `withQueryString()` keeps the viewport query parameters in pagination links, so following the next-page URL searches the same viewport. Apply your application's authentication and rate-limiting policies to the route. Debounce map movement requests and choose viewport and page-size limits appropriate to your workload. These limits belong to the example endpoint; `Bounds` and `withinBounds()` have no hidden result limit. Pagination limits transferred records, while a broad or dense viewport may still examine many rows. Coordinate indexes and ordinary tenant/application filters can help; inspect the actual query plan before exposing a high-volume endpoint.
+
 ### Ordering and Reading Distances
 
 ```php
@@ -302,10 +457,11 @@ The following retrieval methods also preserve geographic filtering and ordering.
 | `withDistance($origin)` | No; distance is null | Yes | Unchanged |
 | `orderByDistance($origin, $direction)` | Yes | No | Appends distance and model key |
 | `withinRadius($origin, $radius)` | Yes | No | Unchanged |
+| `withinBounds($bounds)` | Yes | No | Unchanged |
 | `betweenDistances($origin, $min, $max)` | Yes | No | Unchanged |
 | `nearestTo($origin, $limit)` | Yes | Yes | Replaces earlier ordering with distance and model key |
 
-All methods return a normal Eloquent builder and keep ordinary conditions, global scopes, and soft-delete filters. Radius and distance-band conditions execute in MySQL and work with `count()`, `exists()`, `first()`, `get()`, and normal pagination. SQL uses parameter bindings for coordinates and distance thresholds; no values are rounded before filtering.
+All methods return a normal Eloquent builder and keep ordinary conditions, global scopes, and soft-delete filters. Radius, distance-band, and viewport conditions execute in MySQL and work with `count()`, `exists()`, `first()`, `get()`, and normal pagination. SQL uses parameter bindings for coordinates, bounds, and distance thresholds; no values are rounded before filtering.
 
 Basic joins are supported: coordinate columns are qualified with the model table, and the default selection is the model's `table.*`, so joined-table attributes are not selected automatically. Keep the model table as the query's `FROM` source. Model table aliases, subquery `FROM` sources, schema-qualified table names, grouped queries, unions, distinct projections, custom raw result shapes, and cursor pagination are outside the supported query contract. A join that produces duplicate model rows retains normal SQL behavior.
 
@@ -338,6 +494,8 @@ Execute proximity queries through a model using `HasNearbyCoordinates`, Laravel'
 When you search within a radius, Laravel Nearby adds latitude and longitude ranges covering the complete spherical search area. These ranges narrow the candidates before the exact Haversine condition. A rectangle also contains points outside the circle, so the exact distance comparison always remains in the query. `betweenDistances()` uses its maximum distance for the same preliminary filter and retains both exact boundaries.
 
 The ranges handle the antimeridian and poles and expand outward to account for floating-point rounding. The final distance threshold is never expanded. Zero-radius and global searches skip the box, as do numerically uncertain cases where a restrictive box would be unsafe. No candidate limit or implicit radius is added.
+
+An explicit `withinBounds()` viewport uses exact inclusive coordinate ranges. It adds no Haversine work or outward expansion. Ordinary coordinate indexes, optionally preceded by frequently equality-filtered application columns, can help these predicates. The optimizer chooses its access path; index use is not guaranteed, especially when most rows match.
 
 Use ordinary application conditions to reduce eligible records and combine a radius with nearest ordering when your use case has a meaningful distance limit:
 
@@ -564,6 +722,7 @@ composer validate --strict
 composer test
 composer test:compatibility
 composer examples
+php examples/bounds.php
 ```
 
 `composer test` runs the standalone suite without connecting to a database. It covers validation (including weakly typed callers), immutability, unit conversions and overflow, and geographic edge cases against analytic references. `composer test:compatibility` exercises Composer constraints and Laravel's Illuminate replacement behavior using isolated metadata fixtures.
@@ -592,7 +751,7 @@ composer test:compatibility:real
 
 The [consumer testing guide](https://github.com/zarbinco/Laravel-Nearby/blob/main/tools/consumer/README.md) describes installing this checkout into a disposable Laravel application, booting Artisan and HTTP requests, and exercising its existing coordinate columns. Those checks use a separate database ending in `_consumer` and do not install Testbench. The guide also explains security-blocked minimum-version results and why consumer dependencies must be resolved for the PHP runtime being tested.
 
-The executable files in `examples/` demonstrate distance calculation, conversions, direct construction, and exception handling using Composer autoloading alone.
+The executable files in `examples/` demonstrate distance calculation, conversions, direct construction, viewport containment, and exception handling using Composer autoloading alone.
 
 ### Local Development Installation
 

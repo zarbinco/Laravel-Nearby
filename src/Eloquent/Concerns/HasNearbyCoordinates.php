@@ -12,11 +12,13 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use InvalidArgumentException;
 use LogicException;
+use Zarbinco\Nearby\Bounds;
 use Zarbinco\Nearby\Coordinate;
 use Zarbinco\Nearby\Distance;
 use Zarbinco\Nearby\Eloquent\GeographicBoundingBox;
 use Zarbinco\Nearby\Eloquent\MySqlDistanceExpression;
 use Zarbinco\Nearby\Eloquent\MySqlQueryBuilder;
+use Zarbinco\Nearby\Eloquent\MySqlQueryGuard;
 use Zarbinco\Nearby\Exceptions\InvalidDistanceException;
 use Zarbinco\Nearby\Unit;
 
@@ -99,6 +101,51 @@ trait HasNearbyCoordinates
         return $query->whereRaw($expression->validCoordinatesSql)
             ->orderByRaw($expression->sql.' '.strtolower($direction), $expression->bindings)
             ->orderByRaw(MySqlDistanceExpression::qualifiedColumn($query, $this->getKeyName()).' ASC');
+    }
+
+    #[Scope]
+    protected function withinBounds(Builder $query, Bounds $bounds): Builder
+    {
+        MySqlDistanceExpression::assertSupportedConnection($query);
+        $latitude = MySqlDistanceExpression::qualifiedColumn($query, $this->nearbyLatitudeColumn());
+        $longitude = MySqlDistanceExpression::qualifiedColumn($query, $this->nearbyLongitudeColumn());
+        MySqlQueryGuard::register($query);
+
+        if ($query->getQuery()->columns === null) {
+            $query->select($this->getTable().'.*');
+        }
+
+        $ranges = $bounds->crossesAntimeridian()
+            ? [[$bounds->west, 180.0], [-180.0, $bounds->east]]
+            : [[$bounds->west, $bounds->east]];
+
+        // Both signed representations describe the same inclusive meridian.
+        if (!$bounds->crossesAntimeridian() && $bounds->west === -180.0 && $bounds->east < 180.0) {
+            $ranges[] = [180.0, 180.0];
+        } elseif (!$bounds->crossesAntimeridian() && $bounds->east === 180.0 && $bounds->west > -180.0) {
+            $ranges[] = [-180.0, -180.0];
+        }
+
+        $bindings = [
+            MySqlDistanceExpression::bindNumber($bounds->south),
+            MySqlDistanceExpression::bindNumber($bounds->north),
+        ];
+        $longitudeConditions = [];
+
+        foreach ($ranges as [$minimum, $maximum]) {
+            $longitudeConditions[] = $longitude.' BETWEEN CAST(? AS DOUBLE) AND CAST(? AS DOUBLE)';
+            $bindings[] = MySqlDistanceExpression::bindNumber($minimum);
+            $bindings[] = MySqlDistanceExpression::bindNumber($maximum);
+        }
+
+        return $query->whereRaw(
+            // Native domain comparisons also reject high-scale DECIMAL values
+            // just outside the valid range that would round onto a DOUBLE edge.
+            '('.$latitude.' BETWEEN -90.0 AND 90.0 AND '.$longitude.' BETWEEN -180.0 AND 180.0'
+                .' AND '.$latitude.' BETWEEN CAST(? AS DOUBLE) AND CAST(? AS DOUBLE) AND ('
+                .implode(' OR ', $longitudeConditions).'))',
+            $bindings,
+        );
     }
 
     #[Scope]

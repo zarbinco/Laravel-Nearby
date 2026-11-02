@@ -6,6 +6,8 @@ The first stable release of Laravel Nearby.
 
 ### Added
 
+- Immutable `Bounds` viewports with inclusive containment, signed antimeridian equivalence, and `Bounds::fromViewport()` for continuous unwrapped map coordinates.
+- Eloquent `withinBounds()` filtering with configurable coordinate columns and composition with distance searches, ordering, and pagination.
 - Immutable coordinates with explicit integer and float validation, inclusive geographic bounds, and canonical antimeridian longitudes.
 - Spherical Haversine distance calculations through `Geo::distance()` using a mean Earth radius of 6,371,008.8 meters.
 - Immutable distance values, six units, convenient factories, unrounded conversions, and meaningful validation and overflow exceptions.
